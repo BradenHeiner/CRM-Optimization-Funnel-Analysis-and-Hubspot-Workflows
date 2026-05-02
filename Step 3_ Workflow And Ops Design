@@ -1,0 +1,155 @@
+# Step 3: Workflow and Ops Design
+
+I am going to create a system for lead scoring and build it in Hubspot. This will be the final deliverable: to have a functional, operational Hubspot workflow for lead scoring and Sales/Marketing routing.
+
+### Summary
+
+A rule-based Lead Scoring Model was developed to prioritize high-intent leads based on recent behavioral engagement, persona alignment, and acquisition source.
+
+Building on this model, a dynamic lifecycle framework was designed to govern how contacts progress through key stages. This includes clear qualification criteria for MQL promotion, safeguards against premature advancement, and logic for demotion and disqualification to ensure lifecycle stages accurately reflect current engagement and intent.
+
+To operationalize this system, a set of HubSpot workflows were implemented to calculate lead scores in real time, apply lifecycle updates, and trigger downstream sales and nurture actions based on lead status.
+
+### Section 1: Lead Scoring Model
+
+I developed an additive, rule-based lead scoring model to prioritize high-quality and high-intent leads based on behavioral engagement, persona alignment, and acquisition source. This scoring model serves as a primary input into lifecycle qualification, and is supplemented by additional criteria to ensure leads demonstrate meaningful engagement before promotion to MQL.
+
+Behavioral signals are weighted most heavily, and are calculated based on engagement within the last 30 days, enduring scores reflect current intent. Job title category and lead source scores were set based on observed differences in end-to-end conversion performance.
+
+Scoring Components
+
+1. Behavior (Sum of all activity in last 30 days)
+- Demo Request +25
+- Sequence Reply +20
+- Webinar Attended +15
+- Email Click +10
+- Email Open +5
+
+2. Job Title Category
+- Operations +15
+- Executive +15
+- Energy +10
+- Sales/Marketing +10
+- Legal +5
+- Finance +0
+- RevOps +0
+- Other +0
+- Unknown +0
+
+3. Lead Source
+- Outbound +15
+- Partner +15
+- Referral +10
+- Organic +10
+- Event +5
+- Paid Search +5
+- Content +0
+- Webinar +0
+
+4. Negative Scoring
+- Disqualified -50
+- No activity 30-89 days -10
+- No activity 90+ days -30
+
+Score Interpretation
+
+80+ = Sales-Ready (Hot Lead) Immediate routing to sales with high priority handling.
+50–79 = Marketing Qualified Lead (MQL) Eligible for sales outreach through standard processes.
+<50 = Nurture Remain in marketing workflows until sufficient engagement is reached.
+Business Impact This model improves lead prioritization by aligning scoring with both behavioral intent and historical conversion performance. It ensures high-value leads are surfaced quickly for sales engagement while lower-intent leads are nurtured, directly addressing inefficiencies identified in early-stage qualification and late-stage conversion. Scores are recalculated dynamically as new activity occurs, allowing leads to move between lifecycle stages based on real-time engagement.
+
+### Section 2: Lifecycle and MQL Logic
+
+Contacts progress through a defined lifecycle of Subscriber → Lead → MQL → SQL → Opportunity → Customer, with Disqualified representing an exit state from the funnel.
+
+Each stage represents a distinct level of engagement and qualification. Early stages (Subscriber, Lead) capture initial interest, while later stages (SQL, Opportunity, Customer) reflect active sales engagement and revenue progression.
+
+MQL status is determined using a dynamic, score-based framework that incorporates both behavioral engagement and lead quality attributes.
+
+A contact is promoted to MQL when their lead score reaches 50 or higher, provided they are not disqualified and have demonstrated at least one recent behavioral signal. This ensures that only actively engaged and qualified leads are surfaced to sales.
+
+SQL status is triggered by confirmed sales engagement (e.g., meeting booked), representing a transition from marketing qualification to active sales evaluation. SQL status may also be triggered when a contact reaches a lead score of 80 or higher, enabling expedited routing to sales based on strong, recent engagement signals.
+
+Lifecycle stages are updated dynamically based on changes in lead score and engagement. Contacts may be promoted to MQL as engagement increases or demoted back to Lead if engagement declines, ensuring lifecycle status accurately reflects current intent.
+
+Disqualified leads are removed from the qualification flow and excluded from further progression, while remaining in the system for audit, reporting, and potential reactivation.
+
+The following diagram was created by ChatGPT to visually explain the Lifecycle Logic:
+<img width="1536" height="1024" alt="lifecycle logic workflow" src="https://github.com/user-attachments/assets/cd436484-b688-4c67-a7e1-f0b20a35349d" />
+
+### Section 3: Workflow Design
+
+Workflow Overview
+
+To operationalize the lead scoring model within HubSpot, a modular workflow architecture was implemented to handle behavioral scoring, time decay, and lifecycle updates.
+
+The system consists of three workflow types:
+
+1. Lead Scoring – Add to Touchpoint List
+2. Lead Scoring – Touchpoint List – [Behavior]
+3. Lead Scoring – Lead Scoring and Lifecycle Controls
+
+A separate workflow is created for each of the nine tracked behavioral events.
+
+Supporting Properties
+
+To support this system, the following properties were created:
+
+- Lead Score Final scoring output used to determine lifecycle stage and trigger downstream actions.
+- Behavioral Lead Score Portion of the score derived from recent behavioral activity.
+- Passthrough Lead Score Intermediate scoring layer used to aggregate inputs and prevent recursive workflow triggers. This ensures stable and controlled score updates before writing to Lead Score.
+- Job Title Category Cleaned persona classification used for scoring (defined in Data Hygiene).
+- Lead Source Cleaned acquisition channel used for scoring.
+- Last Touchpoint Date Timestamp of most recent behavioral event, used for triggering workflows.
+- Most Recent Touchpoint Identifies the latest behavioral action for scoring logic.
+
+##### Workflow 1: Lead Scoring - Add to Touchpoint List
+
+Purpose
+- Route contacts to the appropriate behavioral scoring workflow based on their most recent activity.
+
+Triggers
+- Change to Last Touchpoint Date
+
+Key Actions
+- Branch on Most Recent Touchpoint
+- Trigger corresponding behavioral workflow
+- Send admin alert if touchpoint is unrecognized (QA safeguard)
+
+##### Workflow 2: Lead Scoring - Touchpoint List - [Behavior]
+Purpose
+- Apply and decay behavioral scoring for individual events.
+
+Trigger
+- Enrolled via Workflow 1
+
+Key Actions
+- Branch on current list membership to avoid re-triggering score increases
+  - If they are on the list, skip to Delay to reset delay timer
+- Add score for the behavioral event
+- Add to list for the behavior event
+- Delay 30 days
+- Subtract score (decay)
+- Remove from list
+
+##### Workflow 3: Lead Scoring - Lead Scoring and Lifecycle Controls
+Purpose
+- Aggregate all scoring inputs and control lifecycle stage transitions.
+
+Trigger
+- Contact Creation
+- Changes to:
+  - Job Title Category
+  - Lead Source
+  - Behavioral Lead Score
+- Lifecycle Stage set to Disqualified
+- Last Touchpoint Date ≥ 30 days (daily decay trigger)
+- Contact not on Disqualified list
+
+Key Actions
+- Set Passthrough Lead Score to be equal to Behavioral Lead Score
+- Add scoring from Job Title Category and Lead Source
+- Apply inactivity decay adjustments
+- Apply Disqualification penalty and add to Disqualified List
+- Set Lead Score to be equal to Passthrough Lead Score
+- Update Lifecycle Stage to trigger downstream workflows
